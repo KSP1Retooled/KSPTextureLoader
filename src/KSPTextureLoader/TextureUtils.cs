@@ -6,6 +6,7 @@ using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Profiling;
+using UnityEngine.Rendering;
 
 namespace KSPTextureLoader;
 
@@ -511,7 +512,42 @@ internal static class TextureUtils
         return tex;
     }
 
-    internal static Cubemap ConvertTexture2dToCubemap(Texture2D src)
+    /// <summary>
+    /// Whether <see cref="ConvertTexture2dToCubemap"/> can use
+    /// <see cref="Graphics.CopyTexture"/>, in which case an unreadable cubemap
+    /// does not need the source to be readable.
+    /// </summary>
+    internal static bool CanGpuCopyTexture2dToCubemap =>
+        SystemInfo.copyTextureSupport.HasFlag(
+            CopyTextureSupport.Basic | CopyTextureSupport.DifferentTypes
+        );
+
+    // The cell (in face units) within the 4x3 cross that each face is read from.
+    static readonly (int x, int y, CubemapFace face)[] CubemapCrossLayout =
+    [
+        (2, 2, CubemapFace.NegativeY),
+        (3, 1, CubemapFace.PositiveX),
+        (2, 1, CubemapFace.PositiveZ),
+        (1, 1, CubemapFace.NegativeX),
+        (0, 1, CubemapFace.NegativeZ),
+        (2, 0, CubemapFace.PositiveY),
+    ];
+
+    /// <summary>
+    /// Converts a 4x3 cross-layout texture into a cubemap.
+    /// </summary>
+    ///
+    /// <remarks>
+    /// If the platform supports it then this is done using
+    /// <see cref="Graphics.CopyTexture"/>, which preserves the source format. It
+    /// copies the CPU-side data as well when both textures are readable, so
+    /// <paramref name="src"/> only needs to be readable if
+    /// <paramref name="readable"/> is true.
+    ///
+    /// Otherwise, the source must be readable and the resulting cubemap will be
+    /// RGBA32.
+    /// </remarks>
+    internal static Cubemap ConvertTexture2dToCubemap(Texture2D src, bool readable)
     {
         var cubedim = src.width / 4;
         if (src.width != cubedim * 4 || src.height != cubedim * 3)
@@ -519,33 +555,72 @@ internal static class TextureUtils
                 "2D texture was not in the right format for a cubemap. Dimensions need to be 4*cubedim x 3*cubedim."
             );
 
+        // This also ensures that every face region in every mip is aligned to
+        // the block size of compressed formats.
         var mips = GetSupportedMipMapLevels(cubedim, src.graphicsFormat);
         if (mips > src.mipmapCount)
             mips = src.mipmapCount;
 
-        Cubemap cube = CreateUninitializedCubemap(
-            cubedim,
-            mips,
-            GraphicsFormatUtility.GetGraphicsFormat(TextureFormat.RGBA32, false)
-        );
+        Cubemap cube;
 
-        cube.SetPixels(
-            src.GetPixels(2 * cubedim, 2 * cubedim, cubedim, cubedim),
-            CubemapFace.NegativeY
-        );
-        cube.SetPixels(
-            src.GetPixels(3 * cubedim, cubedim, cubedim, cubedim),
-            CubemapFace.PositiveX
-        );
-        cube.SetPixels(
-            src.GetPixels(2 * cubedim, cubedim, cubedim, cubedim),
-            CubemapFace.PositiveZ
-        );
-        cube.SetPixels(src.GetPixels(cubedim, cubedim, cubedim, cubedim), CubemapFace.NegativeX);
-        cube.SetPixels(src.GetPixels(0, cubedim, cubedim, cubedim), CubemapFace.NegativeZ);
-        cube.SetPixels(src.GetPixels(2 * cubedim, 0, cubedim, cubedim), CubemapFace.PositiveY);
+        // The cubemap is created with DontInitializePixels so every mip level
+        // needs to be copied over from the source, otherwise it will contain
+        // garbage.
+        if (CanGpuCopyTexture2dToCubemap && (!readable || src.isReadable))
+        {
+            cube = CreateUninitializedCubemap(cubedim, mips, src.graphicsFormat);
 
-        cube.Apply(false, false);
+            // Make sure the GPU texture exists and drop the CPU copy so that
+            // nothing uploads the uninitialized CPU data over what we copy.
+            if (!readable)
+                cube.Apply(false, true);
+
+            for (int mip = 0; mip < mips; ++mip)
+            {
+                var dim = cubedim >> mip;
+                foreach (var (x, y, face) in CubemapCrossLayout)
+                {
+                    Graphics.CopyTexture(
+                        src,
+                        0,
+                        mip,
+                        x * dim,
+                        y * dim,
+                        dim,
+                        dim,
+                        cube,
+                        (int)face,
+                        mip,
+                        0,
+                        0
+                    );
+                }
+            }
+        }
+        else
+        {
+            cube = CreateUninitializedCubemap(
+                cubedim,
+                mips,
+                GraphicsFormatUtility.GetGraphicsFormat(
+                    TextureFormat.RGBA32,
+                    GraphicsFormatUtility.IsSRGBFormat(src.graphicsFormat)
+                )
+            );
+
+            for (int mip = 0; mip < mips; ++mip)
+            {
+                var dim = cubedim >> mip;
+                foreach (var (x, y, face) in CubemapCrossLayout)
+                {
+                    var pixels = src.GetPixels(x * dim, y * dim, dim, dim, mip);
+                    cube.SetPixels(pixels, face, mip);
+                }
+            }
+
+            cube.Apply(false, !readable);
+        }
+
         cube.name = src.name;
         return cube;
     }

@@ -289,7 +289,8 @@ public partial class TextureLoader
 
     internal static bool Texture2DShouldBeReadable<T>(TextureLoadOptions options)
     {
-        if (typeof(T) == typeof(Cubemap))
+        // Without GPU copies the conversion to a cubemap needs to read the pixels.
+        if (typeof(T) == typeof(Cubemap) && !TextureUtils.CanGpuCopyTexture2dToCubemap)
             return true;
 
         return !options.Unreadable;
@@ -319,13 +320,13 @@ public partial class TextureLoader
 
             if (typeof(T) == typeof(Cubemap))
             {
-                if (!src.isReadable)
+                if (!src.isReadable && !TextureUtils.CanGpuCopyTexture2dToCubemap)
                 {
                     src = tex2d = MakeTexture2DReadable(tex2d, ref convertOpts);
                     texGuard.Update(src);
                 }
 
-                src = TextureUtils.ConvertTexture2dToCubemap(tex2d);
+                src = TextureUtils.ConvertTexture2dToCubemap(tex2d, !loadOpts.Unreadable);
                 texGuard.Update(src);
                 converted = true;
             }

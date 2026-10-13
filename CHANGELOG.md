@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.0.37
+### Fixed
+* Fixed an issue where MonoIO reads would read the whole file up to the start
+  of the desired segment. We now just seek directly instead.
+* KSPTL now includes a `KSPAssemblyDependency` for all shipped dlls.
+
 ## v1.0.36
 ### Added
 * KSPTextureLoader can now load CPU textures directly from asset bundles, even

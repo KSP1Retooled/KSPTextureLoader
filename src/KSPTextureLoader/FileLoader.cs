@@ -1,17 +1,21 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using KSPTextureLoader.Utils;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.IO.LowLevel.Unsafe;
 using Unity.Profiling;
+using UnityEngine;
 
 namespace KSPTextureLoader;
 
 internal static class FileLoader
 {
     static readonly ProfilerMarker ReadFileContentsMarker = new("ReadFileContents");
+
+    static int seekFailureLogged = 0;
 
     public struct FileReadInfo
     {
@@ -38,48 +42,58 @@ internal static class FileLoader
 
             try
             {
-                ReadFileContentsManaged(finfo.path, finfo.offset, data);
-                return data;
+                if (ReadFileContentsManaged(finfo.path, finfo.offset, data))
+                    return data;
             }
             catch
             {
                 data.DisposeExt();
                 throw;
             }
+
+            data.DisposeExt();
+
+            // If managed seeking fails then fall back to AsyncReadManager.
+            return await ReadFileContentsUnity(finfo);
         });
     }
 
-    static unsafe void ReadFileContentsManaged(
-        string path,
-        long fileOffset,
-        LargeNativeArray<byte> data
-    )
+    /// <summary>
+    /// Read <c>data.Length</c> bytes starting at <paramref name="fileOffset"/> within
+    /// <paramref name="path"/> into <paramref name="data"/> using managed file IO.
+    /// </summary>
+    /// <returns>Whether the read worked properly, false otherwise.</returns>
+    static bool ReadFileContentsManaged(string path, long fileOffset, LargeNativeArray<byte> data)
     {
         using var scope = ReadFileContentsMarker.Auto();
 
-        using var reader = File.OpenRead(path);
-        var ptr = data.GetUnsafePtr();
+        using var reader = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            // disable the internal buffer
+            bufferSize: 1
+        );
+
+        // Seek has historically not been reliable on all systems (notably Win10),
+        // so we check where we actually ended up instead of trusting it.
+        long position = reader.Seek(fileOffset, SeekOrigin.Begin);
+
+        // We have encountered problems with seek in the past. Double check
+        // that we are at the right offset and bail out if not.
+        if (position != fileOffset)
+        {
+            WarnSeekFailed(
+                path,
+                $"seeking to offset {fileOffset} ended up at offset {position} instead"
+            );
+            return false;
+        }
 
         long offset = 0;
         long length = data.Length;
         var buffer = new byte[64 * 1024];
-
-        // Seek doesn't appear to reliably actually set the stream to the right
-        // position on some systems (notably Win10).
-        //
-        // We sidestep this by just reading from the start, since all offsets
-        // used for this job are fairly small.
-        while (offset < fileOffset)
-        {
-            var remaining = fileOffset - offset;
-            int count = reader.Read(buffer, 0, (int)Math.Min(remaining, buffer.Length));
-            offset += count;
-
-            if (count == 0)
-                throw new Exception("unexpected EOF when reading file");
-        }
-
-        offset = 0;
 
         while (offset < length)
         {
@@ -92,11 +106,25 @@ internal static class FileLoader
             data.CopyRangeFrom(offset, buffer, count);
             offset += count;
         }
+
+        return true;
     }
 
-    static async Task<LargeNativeArray<byte>> ReadFileContentsUnity(Task<FileReadInfo> infoTask)
+    static void WarnSeekFailed(string path, string message)
     {
-        var info = await infoTask;
+        AsyncUtil.LaunchMainThreadTask(() =>
+        {
+            Debug.LogWarning(
+                $"[KSPTextureLoader] {message} when reading {path}. Falling back to AsyncReadManager."
+            );
+        });
+    }
+
+    static async Task<LargeNativeArray<byte>> ReadFileContentsUnity(Task<FileReadInfo> infoTask) =>
+        await ReadFileContentsUnity(await infoTask);
+
+    static async Task<LargeNativeArray<byte>> ReadFileContentsUnity(FileReadInfo info)
+    {
         var data = await AllocatorUtil.CreateNativeArrayHGlobalAsync<byte>(
             info.length,
             NativeArrayOptions.UninitializedMemory

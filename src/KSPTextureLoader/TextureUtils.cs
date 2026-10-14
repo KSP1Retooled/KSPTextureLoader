@@ -514,8 +514,8 @@ internal static class TextureUtils
 
     /// <summary>
     /// Whether <see cref="ConvertTexture2dToCubemap"/> can use
-    /// <see cref="Graphics.CopyTexture"/>, in which case an unreadable cubemap
-    /// does not need the source to be readable.
+    /// <see cref="Graphics.CopyTexture(Texture, Texture)"/>, in which case an
+    /// unreadable cubemap does not need the source to be readable.
     /// </summary>
     internal static bool CanGpuCopyTexture2dToCubemap =>
         SystemInfo.copyTextureSupport.HasFlag(
@@ -539,9 +539,9 @@ internal static class TextureUtils
     ///
     /// <remarks>
     /// If the platform supports it then this is done using
-    /// <see cref="Graphics.CopyTexture"/>, which preserves the source format. It
-    /// copies the CPU-side data as well when both textures are readable, so
-    /// <paramref name="src"/> only needs to be readable if
+    /// <see cref="Graphics.CopyTexture(Texture, Texture)"/>, which preserves
+    /// the source format. It copies the CPU-side data as well when both textures
+    /// are readable, so <paramref name="src"/> only needs to be readable if
     /// <paramref name="readable"/> is true.
     ///
     /// Otherwise, the source must be readable and the resulting cubemap will be

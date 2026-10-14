@@ -15,8 +15,6 @@ internal static class FileLoader
 {
     static readonly ProfilerMarker ReadFileContentsMarker = new("ReadFileContents");
 
-    static int seekFailureLogged = 0;
-
     public struct FileReadInfo
     {
         public string path;

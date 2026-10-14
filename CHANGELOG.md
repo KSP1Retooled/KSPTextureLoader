@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.0.38
+### Fixed
+* Fixed an issue where some cubemap mipmaps were not being initialized.
+
 ## v1.0.37
 ### Fixed
 * Fixed an issue where MonoIO reads would read the whole file up to the start

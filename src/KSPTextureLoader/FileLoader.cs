@@ -130,16 +130,28 @@ internal static class FileLoader
 
         try
         {
+            // Unity 6 reads the command from a job after Read returns (2019.4
+            // copied it during the call), so it can't live on this stack frame:
+            // it has to stay allocated until the read completes.
+            using var command = new NativeArrayGuard<ReadCommand>(
+                new NativeArray<ReadCommand>(
+                    1,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory
+                )
+            );
+
             ReadHandle handle;
             unsafe
             {
-                var command = new ReadCommand
+                var cmd = (ReadCommand*)NativeArrayUnsafeUtility.GetUnsafePtr(command.array);
+                *cmd = new ReadCommand
                 {
                     Buffer = data.GetUnsafePtr(),
                     Offset = info.offset,
                     Size = data.Length,
                 };
-                handle = AsyncReadManager.Read(info.path, &command, 1);
+                handle = AsyncReadManager.Read(info.path, cmd, 1);
             }
 
             using var hguard = handle;
